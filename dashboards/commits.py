@@ -77,7 +77,7 @@ fig = px.bar(
     y=['total_bids', 'total_decayed_bids_eth'],
     barmode='group',
     labels={'datetime': 'DateTime', 'value': 'ETH'},
-    title='Total Bids and Decayed Bids Over Time'
+    title='Total Bid and Decayed Bid Volume'
 )
 
 # Initialize the Dash app
