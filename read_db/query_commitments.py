@@ -33,12 +33,12 @@ async def fetch_data(from_block: int) -> Optional[pl.DataFrame]:
     Returns:
         Optional[pl.DataFrame]: The processed commitments data or None if no data is fetched.
     """
-    commit_stores: pl.DataFrame = await client.get_commit_stores_v1(from_block=from_block)
-    encrypted_stores: pl.DataFrame = await client.get_encrypted_commit_stores_v1(from_block=from_block)
-    commits_processed: pl.DataFrame = await client.get_commits_processed_v1(from_block=from_block)
+    commit_stores: pl.DataFrame = await client.get_commit_stores_v1(from_block=from_block, print_time=False)
+    encrypted_stores: pl.DataFrame = await client.get_encrypted_commit_stores_v1(from_block=from_block, print_time=False)
+    commits_processed: pl.DataFrame = await client.get_commits_processed_v1(from_block=from_block, print_time=False)
 
     # If any queries are empty, return None
-    if commit_stores.is_empty() or encrypted_stores.is_empty() or commits_processed.is_empty():
+    if commit_stores is None or encrypted_stores is None or commits_processed is None:
         return None
 
     # Join and process data
@@ -103,7 +103,7 @@ async def main() -> None:
         print(f"New commitments: {commitments_df.shape[0]}")
         await write_data(commitments_df, merge_on=INDEX)
     else:
-        print(f"Block number: {latest_block} - No new data to write.")
+        print(f"Latest Block number: {latest_block} - No new data to write.")
 
 if __name__ == "__main__":
     while True:
