@@ -29,12 +29,12 @@ commit_df = (
 }).select(
     'datetime',
     'holesky_block_number',
-    'txnHash',
     'bidder',
     'commiter',
     'bid_eth',
     'bid_latency',
-    'dispatchTimestamp',
+    'txnHash',
+    # 'dispatchTimestamp',
 )
 
 # Initialize the Dash app
@@ -70,9 +70,9 @@ def update_table(bidder_addr):
                   pl.col('bidder') == bidder_addr.lower())
               )
         return df.to_dicts()
-        return []
+    return []
 
 
 # Run the app
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    app.run_server(host='0.0.0.0', port=8050, debug=True)
