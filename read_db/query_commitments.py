@@ -33,9 +33,12 @@ async def fetch_data(from_block: int) -> Optional[pl.DataFrame]:
     Returns:
         Optional[pl.DataFrame]: The processed commitments data or None if no data is fetched.
     """
-    commit_stores: pl.DataFrame = await client.get_commit_stores_v1(from_block=from_block, print_time=False)
-    encrypted_stores: pl.DataFrame = await client.get_encrypted_commit_stores_v1(from_block=from_block, print_time=False)
-    commits_processed: pl.DataFrame = await client.get_commits_processed_v1(from_block=from_block, print_time=False)
+    # Query window data using the new event names
+    commit_stores: pl.DataFrame = await client.execute_event_query('OpenedCommitmentStored', from_block=from_block)
+    encrypted_stores: pl.DataFrame = await client.execute_event_query('UnopenedCommitmentStored', from_block=from_block)
+
+    # Get commitment slashing
+    commits_processed = await client.execute_event_query('CommitmentProcessed', from_block=from_block)
 
     # If any queries are empty, return None
     if commit_stores is None or encrypted_stores is None or commits_processed is None:
@@ -93,6 +96,7 @@ async def main() -> None:
     Main function to check table existence and write data.
     """
     latest_block: Optional[int] = get_latest_block()
+    print('latest_block:', latest_block)
     # Start from 0 if the table doesn't exist.
     from_block: int = (latest_block+1) if latest_block is not None else 0
 
