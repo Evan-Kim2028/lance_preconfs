@@ -408,19 +408,44 @@ def __(df, mo):
     # max block for the slider
     max_block = df.select("mev_commit_block_number").max().item()
 
-    max_block_slider = mo.ui.slider(
-        start=0, stop=max_block, value=max_block, label="mev-commit block range"
+    max_block_slider = mo.ui.range_slider(
+        start=0, stop=max_block, label="mev-commit block range"
     )
     max_block_slider
     return max_block, max_block_slider
 
 
 @app.cell
+def __(max_block_slider):
+    max_block_slider.value
+    return
+
+
+@app.cell
+def __(max_block_slider):
+    print(min(max_block_slider.value))
+    return
+
+
+@app.cell
+def __(max_block_slider):
+    print(max(max_block_slider.value))
+    return
+
+
+@app.cell
 def __(df, max_block_slider, mo, pl):
     # Cell 3 - display the transformed dataframe
-    filtered_df = df.filter(pl.col("bid_decay_latency") < max_block_slider.value)
+    filtered_df = df.filter(
+        pl.col("mev_commit_block_number") > min(max_block_slider.value)
+    ).filter(pl.col("mev_commit_block_number") < max(max_block_slider.value))
     mo.ui.table(filtered_df)
     return filtered_df,
+
+
+@app.cell
+def __():
+    return
 
 
 if __name__ == "__main__":
