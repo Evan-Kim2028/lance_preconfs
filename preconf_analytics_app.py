@@ -1,11 +1,7 @@
 import marimo
 
 __generated_with = "0.8.5"
-app = marimo.App(
-    width="full",
-    app_title="preconf_analytics",
-    layout_file="layouts/test_app.grid.json",
-)
+app = marimo.App(width="full", app_title="preconf_analytics")
 
 
 @app.cell
@@ -75,15 +71,13 @@ def __(commitments_table, pl):
 
 @app.cell
 def __(mo):
-    mo.md("# Preconf Analytics")
+    mo.md("""# Preconf Analytics""")
     return
 
 
 @app.cell
 def __(mo):
-    mo.md(
-        "### Bid Latency - Search transactions that are within a bid latency threshold. Filter each column further by clicking on the column name."
-    )
+    mo.md("""### Bid Latency - Search transactions that are within a bid latency threshold. Filter each column further by clicking on the column name.""")
     return
 
 
