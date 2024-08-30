@@ -181,7 +181,7 @@ def __(df, pl):
     return date_truncate_df, slash_rate_df
 
 
-@app.cell(hide_code=True)
+@app.cell
 def __(alt, datetime, pd, pl, slash_rate_df, timedelta):
     # Calculate data for the past 24 hours
     current_time = datetime.now()
@@ -259,7 +259,7 @@ def __(alt, datetime, pd, pl, slash_rate_df, timedelta):
             dx=-50,
             dy=-150,
             fontSize=24,
-            color="white",  # Font color
+            color="black",  # Font color
         )
         .encode(text="text:N")
         .properties(
@@ -393,7 +393,13 @@ def __(alt, color, commiter_slash_rate_df, past_24_hours, pl):
 
 @app.cell
 def __(mo):
-    mo.md("""## Opened Commitments - Search for preconfirmation bids. Filter each column further by clicking on the column name.""")
+    mo.md("""## Opened Commitments Lookup""")
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md("""Search for preconfirmation bids. Filter each column further by clicking on the column name.""")
     return
 
 
