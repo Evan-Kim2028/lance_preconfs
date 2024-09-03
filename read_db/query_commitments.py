@@ -11,7 +11,7 @@ from mev_commit_sdk_py.hypersync_client import Hypersync
 COMMITMENT_TABLE_NAME: str = "commitments"
 INDEX: str = "block_number"
 URI: str = "data"
-SLEEP_INTERVAL: int = 10  # Time to wait between iterations (in seconds)
+SLEEP_INTERVAL: int = 25  # Time to wait between iterations (in seconds)
 
 # Initialize clients and LanceTable
 client: Hypersync = Hypersync(url='https://mev-commit.hypersync.xyz')
@@ -51,7 +51,7 @@ async def fetch_data(from_block: int) -> Optional[pl.DataFrame]:
         .with_columns(('0x' + pl.col("txnHash")).alias('txnHash'))
         .join(commits_processed.select('commitmentIndex', 'isSlash'), on='commitmentIndex', how='inner')
     ).select(
-        'block_number', 'blockNumber', 'txnHash', 'bid', 'commiter', 'bidder',
+        'block_number', 'timestamp', 'blockNumber', 'txnHash', 'bid', 'commiter', 'bidder',
         'isSlash', 'decayStartTimeStamp', 'decayEndTimeStamp', 'dispatchTimestamp',
         'commitmentHash', 'commitmentIndex', 'commitmentDigest', 'commitmentSignature',
         'revertingTxHashes', 'bidHash', 'bidSignature', 'sharedSecretKey'
