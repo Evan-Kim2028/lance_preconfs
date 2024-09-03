@@ -1,10 +1,10 @@
 import marimo
 
-__generated_with = "0.8.5"
+__generated_with = "0.8.7"
 app = marimo.App(width="full", app_title="preconf_analytics")
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __():
     import marimo as mo
     import pandas as pd
@@ -15,40 +15,49 @@ def __():
 
     pl.Config.set_fmt_str_lengths(200)
     pl.Config.set_fmt_float("full")
+    None
     return LanceTable, datetime, mo, pd, pl, timedelta
 
 
 @app.cell(hide_code=True)
-def __(LanceTable):
+def __(LanceTable, pl):
     # Lance table info
-    commitment_table_name = "commitments"
+    commitment_table_name: str = "commitments"
+    l1_tx_table_name: str = "l1_txs"
     index: str = "block_number"
     lance_tables = LanceTable()
     uri: str = "data"  # locally saved to "data folder"
 
-    # open the database and get the latest block_number
+    # open the mev-commit commitments table
     commitments_table = lance_tables.open_table(
         uri=uri, table=commitment_table_name
     )
+
+    # open the l1 txs table
+    l1_tx_table = _table = lance_tables.open_table(uri=uri, table=l1_tx_table_name)
+    l1_tx_df = pl.from_arrow(l1_tx_table.to_lance().to_table())
     return (
         commitment_table_name,
         commitments_table,
         index,
+        l1_tx_df,
+        l1_tx_table,
+        l1_tx_table_name,
         lance_tables,
         uri,
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(commitments_table, pl):
-    df = (
+    commit_df = (
         pl.from_arrow(commitments_table.to_lance().to_table())
         .with_columns(
             (pl.col("dispatchTimestamp") - pl.col("decayStartTimeStamp")).alias(
                 "bid_decay_latency"
             ),
             (pl.col("bid") / 10**18).alias("bid_eth"),
-            pl.from_epoch("dispatchTimestamp", time_unit="ms").alias("datetime"),
+            pl.from_epoch("timestamp", time_unit="ms").alias("datetime"),
         )
         # todo - implement bid decay calculation
         .select(
@@ -71,7 +80,22 @@ def __(commitments_table, pl):
         )
         .sort(by="datetime", descending=True)
     )
-    return df,
+    return commit_df,
+
+
+@app.cell(hide_code=True)
+def __(commit_df, l1_tx_df, pl):
+    # join commits and l1 df together
+    commits_l1_df = commit_df.join(
+        l1_tx_df.rename({"hash": "l1_txnHash"}),
+        on="l1_txnHash",
+        how="left",
+        suffix="_l1",
+    ).with_columns(
+        # calculate if the preconf block was the same as the l1 block the tx ended up in
+        (pl.col("block_number") - pl.col("l1_block_number")).alias("l1_block_diff")
+    )
+    return commits_l1_df,
 
 
 @app.cell
@@ -86,16 +110,16 @@ def __(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __():
     import altair as alt
     return alt,
 
 
-@app.cell
-def __(df, pl):
+@app.cell(hide_code=True)
+def __(commits_l1_df, pl):
     bidder_group_df = (
-        df.group_by("bidder")
+        commits_l1_df.group_by("bidder")
         .agg(
             pl.len().alias("bid_count"),
             pl.col("bid_eth").sum().alias("total_eth_bids"),
@@ -105,7 +129,7 @@ def __(df, pl):
     return bidder_group_df,
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(alt, bidder_group_df):
     # Bidder Activity Charts
     # Preconf Bid Count
@@ -156,10 +180,10 @@ def __(mo):
     return
 
 
-@app.cell
-def __(df, pl):
+@app.cell(hide_code=True)
+def __(commits_l1_df, pl):
     # Round the datetime column to the nearest hour
-    date_truncate_df = df.with_columns(
+    date_truncate_df = commits_l1_df.with_columns(
         pl.col("datetime").dt.truncate("1h").alias("hour")
     )
 
@@ -181,7 +205,7 @@ def __(df, pl):
     return date_truncate_df, slash_rate_df
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(alt, datetime, pd, pl, slash_rate_df, timedelta):
     # Calculate data for the past 24 hours
     current_time = datetime.now()
@@ -404,9 +428,9 @@ def __(mo):
 
 
 @app.cell
-def __(df, mo):
+def __(commits_l1_df, mo):
     # max block for the slider
-    max_block = df.select("mev_commit_block_number").max().item()
+    max_block = commits_l1_df.select("mev_commit_block_number").max().item()
 
     max_block_slider = mo.ui.range_slider(
         start=0, stop=max_block, label="mev-commit block range"
@@ -433,14 +457,72 @@ def __(max_block_slider):
     return
 
 
-@app.cell
-def __(df, max_block_slider, mo, pl):
+@app.cell(hide_code=True)
+def __(commits_l1_df, max_block_slider, mo, pl):
     # Cell 3 - display the transformed dataframe
-    filtered_df = df.filter(
+    filtered_df = commits_l1_df.filter(
         pl.col("mev_commit_block_number") > min(max_block_slider.value)
     ).filter(pl.col("mev_commit_block_number") < max(max_block_slider.value))
     mo.ui.table(filtered_df)
     return filtered_df,
+
+
+@app.cell
+def __(mo):
+    mo.md("""### Null Block Count""")
+    return
+
+
+@app.cell
+def __(filtered_df, pl):
+    null_block_slashing_groupby_df = filtered_df.group_by("l1_block_diff").agg(
+        pl.len().alias("count")
+    )
+    return null_block_slashing_groupby_df,
+
+
+@app.cell
+def __(alt, null_block_slashing_groupby_df):
+    # Plot Altair vertical bar chart
+    bar_chart = (
+        alt.Chart(null_block_slashing_groupby_df)
+        .mark_bar()
+        .encode(
+            x=alt.X(
+                "l1_block_diff:O",
+                title="L1 Block Difference",
+                axis=alt.Axis(labelAngle=0),
+            ),
+            y=alt.Y("count:Q", title="Count"),
+            tooltip=["l1_block_diff", "count"],
+        )
+        .properties(
+            title="Vertical Bar Chart of L1 Block Difference vs Count",
+            width=600,
+            height=400,
+        )
+    )
+
+    # Display the chart
+    bar_chart.show()
+    return bar_chart,
+
+
+@app.cell
+def __(mo):
+    mo.md("""## BI Explorer""")
+    return
+
+
+@app.cell
+def __(filtered_df, mo):
+    mo.ui.data_explorer(filtered_df)
+    return
+
+
+@app.cell
+def __():
+    return
 
 
 @app.cell
