@@ -1,6 +1,6 @@
 [project]
 name = "lance-preconfs"
-version = "0.2.1"
+version = "0.2.2"
 description = "Add your description here"
 authors = [{ name = "Evan K", email = "ekcopersonal@gmail.com" }]
 dependencies = [
