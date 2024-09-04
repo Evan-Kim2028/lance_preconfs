@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.8.7"
+__generated_with = "0.8.9"
 app = marimo.App(width="full", app_title="preconf_analytics")
 
 
@@ -24,6 +24,7 @@ def __(LanceTable, pl):
     # Lance table info
     commitment_table_name: str = "commitments"
     l1_tx_table_name: str = "l1_txs"
+    mev_boost_table_name: str = "mev_boost_blocks"
     index: str = "block_number"
     lance_tables = LanceTable()
     uri: str = "data"  # locally saved to "data folder"
@@ -36,6 +37,10 @@ def __(LanceTable, pl):
     # open the l1 txs table
     l1_tx_table = _table = lance_tables.open_table(uri=uri, table=l1_tx_table_name)
     l1_tx_df = pl.from_arrow(l1_tx_table.to_lance().to_table())
+
+    # open mev-boost-blocks table
+    mev_boost_blocks = lance_tables.open_table(uri=uri, table=mev_boost_table_name)
+    mev_boost_blocks_df = pl.from_arrow((mev_boost_blocks.to_lance().to_table()))
     return (
         commitment_table_name,
         commitments_table,
@@ -44,6 +49,9 @@ def __(LanceTable, pl):
         l1_tx_table,
         l1_tx_table_name,
         lance_tables,
+        mev_boost_blocks,
+        mev_boost_blocks_df,
+        mev_boost_table_name,
         uri,
     )
 
@@ -102,6 +110,140 @@ def __(commit_df, l1_tx_df, pl):
 def __(mo):
     mo.md("""# Preconf Analytics""")
     return
+
+
+@app.cell
+def __(mo):
+    mo.md("""## mev-boost data""")
+    return
+
+
+@app.cell(hide_code=True)
+def __():
+    def byte_to_string(hex_string):
+        if hex_string == "0x":
+            return ""
+        # Remove the "0x" prefix and decode the hex string
+        bytes_object = bytes.fromhex(hex_string[2:])
+        try:
+            human_readable_string = bytes_object.decode("utf-8")
+        except UnicodeDecodeError:
+            human_readable_string = bytes_object.decode("latin-1")
+        return human_readable_string
+    return byte_to_string,
+
+
+@app.cell(hide_code=True)
+def __(byte_to_string, mev_boost_blocks_df, pl):
+    mev_boost_relay_transformed_df = mev_boost_blocks_df.with_columns(
+        pl.from_epoch("timestamp", time_unit="s").alias("datetime"),
+        # map byte_to_string
+        pl.col("extra_data")
+        .map_elements(byte_to_string, return_dtype=str)
+        .alias("builder_graffiti"),
+        pl.when(pl.col("relay").is_null())
+        .then(False)
+        .otherwise(True)
+        .alias("mev_boost"),
+        (pl.col("value") / 10**18).round(9).alias("block_bid_eth"),
+    ).select(
+        "datetime",
+        "block_number",
+        "builder_graffiti",
+        "mev_boost",
+        "relay",
+        "block_bid_eth",
+        "base_fee_per_gas",
+        "gas_used",
+    )
+    return mev_boost_relay_transformed_df,
+
+
+@app.cell(hide_code=True)
+def __(commit_df, mev_boost_relay_transformed_df, pl):
+    mev_boost_blocks_preconfs_joined_df = mev_boost_relay_transformed_df.join(
+        commit_df.select(
+            "l1_block_number", "isSlash", "bid_eth", "commiter", "bidder"
+        ),
+        left_on="block_number",
+        right_on="l1_block_number",
+        how="left",
+    ).with_columns(
+        pl.when(pl.col("bidder").is_not_null())
+        .then(True)
+        .otherwise(False)
+        .alias("preconf")
+    )
+    return mev_boost_blocks_preconfs_joined_df,
+
+
+@app.cell(hide_code=True)
+def __(
+    alt,
+    mev_boost_blocks_preconfs_joined_df,
+    mev_boost_relay_transformed_df,
+    pl,
+):
+    min_mev_boost_block = (
+        mev_boost_relay_transformed_df.select("block_number").min().item()
+    )
+    max_mev_boost_block = (
+        mev_boost_relay_transformed_df.select("block_number").max().item()
+    )
+
+
+    # Create Altair bar chart for MEV Boost Blocks
+    mev_boost_block_chart = (
+        alt.Chart(
+            mev_boost_relay_transformed_df.group_by("mev_boost").agg(
+                pl.col("mev_boost").count().alias("count")
+            )
+        )
+        .mark_bar()
+        .encode(
+            x=alt.X("mev_boost:N"),
+            y=alt.Y("count:Q", title="Count"),
+            color=alt.Color("mev_boost:N", legend=None),
+        )
+        .properties(
+            title=f"MEV-Boost Blocks from {min_mev_boost_block} - {max_mev_boost_block} ({max_mev_boost_block - min_mev_boost_block} blocks)",
+            height=400,
+            width=600,
+        )
+        .interactive()  # Enable interactivity
+    )
+
+    # Create Altair scatter plot for preconf block bids
+    preconf_block_bids_chart = (
+        alt.Chart(
+            mev_boost_blocks_preconfs_joined_df.filter(pl.col("block_bid_eth") > 0)
+        )
+        .mark_point()
+        .encode(
+            x="datetime:T",  # Ensure 'datetime' is treated as temporal data
+            y="block_bid_eth:Q",
+            color="preconf:N",
+            tooltip=["block_number", "builder_graffiti", "block_bid_eth", "relay"],
+        )
+        .properties(title="mev-boost blocks with preconfs", height=400, width=600)
+        .interactive()  # Enable interactivity
+    )
+
+    # Combine the two charts side-by-side with better spacing and make them scrollable
+    mev_boost_charts = (
+        alt.concat(mev_boost_block_chart, preconf_block_bids_chart)
+        .configure_view(continuousHeight=400, continuousWidth=600)
+        .resolve_scale()
+    )
+
+    mev_boost_charts.show()
+    return (
+        max_mev_boost_block,
+        mev_boost_block_chart,
+        mev_boost_charts,
+        min_mev_boost_block,
+        preconf_block_bids_chart,
+    )
 
 
 @app.cell
@@ -217,7 +359,10 @@ def __(alt, datetime, pd, pl, slash_rate_df, timedelta):
     # Calculate total slash count and rate for the past 24 hours
     total_slash_count = df_last_24_hours["slash_count"].sum()
     total_non_slash_count = df_last_24_hours["non_slash_count"].sum()
+    # Check for None type and set total_slash_rate to 0 if None
     total_slash_rate = df_last_24_hours["slash_rate"].mean()
+    if total_slash_rate is None:
+        total_slash_rate = 0
 
 
     # Create formatted strings for each line of the text box
@@ -427,7 +572,7 @@ def __(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(commits_l1_df, mo):
     # max block for the slider
     max_block = commits_l1_df.select("mev_commit_block_number").max().item()
@@ -465,47 +610,6 @@ def __(commits_l1_df, max_block_slider, mo, pl):
     ).filter(pl.col("mev_commit_block_number") < max(max_block_slider.value))
     mo.ui.table(filtered_df)
     return filtered_df,
-
-
-@app.cell
-def __(mo):
-    mo.md("""### Null Block Count""")
-    return
-
-
-@app.cell
-def __(filtered_df, pl):
-    null_block_slashing_groupby_df = filtered_df.group_by("l1_block_diff").agg(
-        pl.len().alias("count")
-    )
-    return null_block_slashing_groupby_df,
-
-
-@app.cell
-def __(alt, null_block_slashing_groupby_df):
-    # Plot Altair vertical bar chart
-    bar_chart = (
-        alt.Chart(null_block_slashing_groupby_df)
-        .mark_bar()
-        .encode(
-            x=alt.X(
-                "l1_block_diff:O",
-                title="L1 Block Difference",
-                axis=alt.Axis(labelAngle=0),
-            ),
-            y=alt.Y("count:Q", title="Count"),
-            tooltip=["l1_block_diff", "count"],
-        )
-        .properties(
-            title="Vertical Bar Chart of L1 Block Difference vs Count",
-            width=600,
-            height=400,
-        )
-    )
-
-    # Display the chart
-    bar_chart.show()
-    return bar_chart,
 
 
 @app.cell
