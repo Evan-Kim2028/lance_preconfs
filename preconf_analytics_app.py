@@ -4,8 +4,9 @@ __generated_with = "0.8.9"
 app = marimo.App(width="full", app_title="preconf_analytics")
 
 
-@app.cell(hide_code=True)
+@app.cell
 def __():
+    import altair as alt
     import marimo as mo
     import pandas as pd
     import polars as pl
@@ -16,7 +17,7 @@ def __():
     pl.Config.set_fmt_str_lengths(200)
     pl.Config.set_fmt_float("full")
     None
-    return LanceTable, datetime, mo, pd, pl, timedelta
+    return LanceTable, alt, datetime, mo, pd, pl, timedelta
 
 
 @app.cell(hide_code=True)
@@ -56,7 +57,7 @@ def __(LanceTable, pl):
     )
 
 
-@app.cell(hide_code=True)
+@app.cell
 def __(commitments_table, pl):
     commit_df = (
         pl.from_arrow(commitments_table.to_lance().to_table())
@@ -67,15 +68,48 @@ def __(commitments_table, pl):
             (pl.col("bid") / 10**18).alias("bid_eth"),
             pl.from_epoch("timestamp", time_unit="ms").alias("datetime"),
         )
-        # todo - implement bid decay calculation
+        # bid decay calculations
+        # the formula to calculate the bid decay = (decayEndTimeStamp - decayStartTimeStamp) / (dispatchTimestamp - decayEndTimeStamp). If it's a negative number, then bid would have decayed to 0
+        .with_columns(
+            # need to change type from uint to int to account for negative numbers
+            pl.col("decayStartTimeStamp").cast(pl.Int64),
+            pl.col("decayEndTimeStamp").cast(pl.Int64),
+            pl.col("dispatchTimestamp").cast(pl.Int64),
+        )
+        .with_columns(
+            (pl.col("decayEndTimeStamp") - pl.col("decayStartTimeStamp")).alias(
+                "decay_range"
+            ),
+            (pl.col("decayEndTimeStamp") - pl.col("dispatchTimestamp")).alias(
+                "dispatch_range"
+            ),
+        )
+        .with_columns(
+            (pl.col("dispatch_range") / pl.col("decay_range")).alias(
+                "decay_multiplier"
+            )
+        )
+        .with_columns(
+            pl.when(pl.col("decay_multiplier") < 0)
+            .then(0)
+            .otherwise(pl.col("decay_multiplier"))
+        )
+        # calculate decayed bid. The decay multiplier is the amount that the bid decays by.
+        .with_columns(
+            (pl.col("decay_multiplier") * pl.col("bid_eth")).alias(
+                "decayed_bid_eth"
+            )
+        )
         .select(
             "datetime",
             "bid_decay_latency",
+            "decay_multiplier",
             "isSlash",
             "block_number",
             "blockNumber",
             "txnHash",
             "bid_eth",
+            "decayed_bid_eth",
             "commiter",
             "bidder",
         )
@@ -91,7 +125,7 @@ def __(commitments_table, pl):
     return commit_df,
 
 
-@app.cell(hide_code=True)
+@app.cell
 def __(commit_df, l1_tx_df, pl):
     # join commits and l1 df together
     commits_l1_df = commit_df.join(
@@ -133,7 +167,7 @@ def __():
     return byte_to_string,
 
 
-@app.cell(hide_code=True)
+@app.cell
 def __(byte_to_string, mev_boost_blocks_df, pl):
     mev_boost_relay_transformed_df = mev_boost_blocks_df.with_columns(
         pl.from_epoch("timestamp", time_unit="s").alias("datetime"),
@@ -159,22 +193,37 @@ def __(byte_to_string, mev_boost_blocks_df, pl):
     return mev_boost_relay_transformed_df,
 
 
-@app.cell(hide_code=True)
+@app.cell
 def __(commit_df, mev_boost_relay_transformed_df, pl):
-    mev_boost_blocks_preconfs_joined_df = mev_boost_relay_transformed_df.join(
+    # transform commit_df to stsandardize to block level data
+    preconf_blocks_grouped_df = (
         commit_df.select(
-            "l1_block_number", "isSlash", "bid_eth", "commiter", "bidder"
-        ),
+            "l1_block_number",
+            "isSlash",
+            "bid_eth",
+            "decayed_bid_eth",
+            "commiter",
+            "bidder",
+        )
+        .group_by("l1_block_number")
+        .agg(
+            pl.col("decayed_bid_eth").sum().alias("total_decayed_bid_eth"),
+            pl.col("bid_eth").sum().alias("total_bid_eth"),
+        )
+    )
+    # join mev-boost data to preconf data
+    mev_boost_blocks_preconfs_joined_df = mev_boost_relay_transformed_df.join(
+        preconf_blocks_grouped_df,
         left_on="block_number",
         right_on="l1_block_number",
         how="left",
     ).with_columns(
-        pl.when(pl.col("bidder").is_not_null())
+        pl.when(pl.col("total_bid_eth").is_not_null())
         .then(True)
         .otherwise(False)
         .alias("preconf")
     )
-    return mev_boost_blocks_preconfs_joined_df,
+    return mev_boost_blocks_preconfs_joined_df, preconf_blocks_grouped_df
 
 
 @app.cell(hide_code=True)
@@ -192,7 +241,6 @@ def __(
     )
 
 
-    # Create Altair bar chart for MEV Boost Blocks
     mev_boost_block_chart = (
         alt.Chart(
             mev_boost_relay_transformed_df.group_by("mev_boost").agg(
@@ -203,17 +251,18 @@ def __(
         .encode(
             x=alt.X("mev_boost:N"),
             y=alt.Y("count:Q", title="Count"),
-            color=alt.Color("mev_boost:N", legend=None),
+            color=alt.Color(
+                "mev_boost:N", legend=alt.Legend(title="MEV Boost")
+            ),  # Add legend
         )
         .properties(
             title=f"MEV-Boost Blocks from {min_mev_boost_block} - {max_mev_boost_block} ({max_mev_boost_block - min_mev_boost_block} blocks)",
             height=400,
-            width=600,
+            width=500,
         )
         .interactive()  # Enable interactivity
     )
 
-    # Create Altair scatter plot for preconf block bids
     preconf_block_bids_chart = (
         alt.Chart(
             mev_boost_blocks_preconfs_joined_df.filter(pl.col("block_bid_eth") > 0)
@@ -222,18 +271,25 @@ def __(
         .encode(
             x="datetime:T",  # Ensure 'datetime' is treated as temporal data
             y="block_bid_eth:Q",
-            color="preconf:N",
+            color=alt.Color(
+                "preconf:N",
+                legend=alt.Legend(title="Preconf Block Bids"),
+                scale=alt.Scale(
+                    scheme="tableau10"
+                ),  # Use a color scheme for improved colors
+            ),
             tooltip=["block_number", "builder_graffiti", "block_bid_eth", "relay"],
         )
-        .properties(title="mev-boost blocks with preconfs", height=400, width=600)
+        .properties(title="mev-boost blocks with preconfs", height=400, width=500)
         .interactive()  # Enable interactivity
     )
 
-    # Combine the two charts side-by-side with better spacing and make them scrollable
     mev_boost_charts = (
         alt.concat(mev_boost_block_chart, preconf_block_bids_chart)
         .configure_view(continuousHeight=400, continuousWidth=600)
-        .resolve_scale()
+        .resolve_scale(
+            color="independent"
+        )  # Ensure each chart's legend is independent
     )
 
     mev_boost_charts.show()
@@ -247,15 +303,53 @@ def __(
 
 
 @app.cell
+def __(mev_boost_blocks_preconfs_joined_df, pl):
+    # chart that shows the total decayed bids vs the mev-boost bid amount
+    preconf_bid_mev_boost_df = mev_boost_blocks_preconfs_joined_df.filter(
+        pl.col("preconf") == True
+    ).with_columns(
+        (pl.col("total_decayed_bid_eth") / pl.col("block_bid_eth"))
+        .round(3)
+        .alias("preconf_bid_amt_pct")
+    )
+    return preconf_bid_mev_boost_df,
+
+
+@app.cell
+def __(alt, preconf_bid_mev_boost_df):
+    # Create a scatter plot
+    preconf_bid_breakdown = (
+        alt.Chart(preconf_bid_mev_boost_df)
+        .mark_point()  # Mark type for scatter plot
+        .encode(
+            x=alt.X("block_number:N", title="Block Number"),
+            y=alt.Y("preconf_bid_amt_pct:Q", title="preconf percent of bid"),
+            color=alt.Color("block_bid_eth:Q", title="mev-boost bid (ETH)").scale(
+                scheme="blues"
+            ),
+            tooltip=[
+                "block_number",
+                "builder_graffiti",
+                "preconf_bid_amt_pct",
+                "block_bid_eth",
+            ],
+        )
+        .properties(
+            width=600,
+            height=400,
+            title="preconf percent of mev-boost bids",
+        )
+        .interactive()
+    )
+
+    preconf_bid_breakdown
+    return preconf_bid_breakdown,
+
+
+@app.cell
 def __(mo):
     mo.md(r"""## Bidder Activity""")
     return
-
-
-@app.cell(hide_code=True)
-def __():
-    import altair as alt
-    return alt,
 
 
 @app.cell(hide_code=True)
@@ -265,17 +359,26 @@ def __(commits_l1_df, pl):
         .agg(
             pl.len().alias("bid_count"),
             pl.col("bid_eth").sum().alias("total_eth_bids"),
+            pl.col("decayed_bid_eth").sum().alias("total_decayed_eth_bids"),
         )
         .sort(by="bid_count", descending=True)
     )
-    return bidder_group_df,
+
+    # Melt the DataFrame
+    melted_bidder_df = bidder_group_df.unpivot(
+        index=["bidder"],  # Columns to keep as identifiers
+        on=["total_eth_bids", "total_decayed_eth_bids"],  # Columns to melt
+        variable_name="bid_type",  # New column name for melted variable
+        value_name="eth_bids",  # New column name for values
+    )
+    return bidder_group_df, melted_bidder_df
 
 
 @app.cell(hide_code=True)
-def __(alt, bidder_group_df):
+def __(alt, bidder_group_df, melted_bidder_df):
     # Bidder Activity Charts
     # Preconf Bid Count
-    chart1 = (
+    bidder_count_chart = (
         alt.Chart(bidder_group_df.head(10))
         .mark_bar()
         .encode(
@@ -284,36 +387,41 @@ def __(alt, bidder_group_df):
                 "bid_count:Q", title="Preconf Count", scale=alt.Scale(reverse=True)
             ),
         )
-        .properties(width=600, height=300, title="Preconf Commitments")
+        .properties(width=500, height=300, title="Preconf Commitments")
     )
 
-    # Total ETH Bid amount
-    chart2 = (
-        alt.Chart(bidder_group_df.head(10))
-        .mark_bar()
+    # Create a grouped bar chart
+    bidder_bids_chart = (
+        alt.Chart(melted_bidder_df)
+        .mark_bar()  # Bar mark
         .encode(
-            y=alt.Y(
-                "bidder:N",
-                axis=alt.Axis(
-                    title="Bidders", titleAngle=0, titleY=-10, titleX=-80
-                ),
-            ),  # Center the y-axis title
-            x=alt.X("total_eth_bids:Q", title="Total ETH Bids"),
+            y=alt.X(
+                "bidder:N", axis=alt.Axis(title="Bidders")
+            ),  # Categorical Bidders on the x-axis
+            x=alt.Y(
+                "eth_bids:Q", title="ETH Bids"
+            ),  # Quantitative ETH Bids on y-axis
+            color=alt.Color(
+                "bid_type:N", legend=alt.Legend(title="Bid Type")
+            ),  # Color represents bid type
+            yOffset=alt.X("bid_type:N"),  # Offset bars by bid type for grouping
         )
         .properties(
-            width=600,  # Adjusted width for side-by-side display
-            height=300,
-            title="Total Bids (ETH)",
+            width=500,  # Width for the chart
+            height=300,  # Adjust height for the chart
+            title="Total Bids (ETH) by Bidder and Type",
         )
     )
 
     # Combine the two charts side-by-side with better spacing
-    combined_chart = alt.concat(chart1, chart2, spacing=0).resolve_scale(
+    combined_chart = alt.concat(
+        bidder_count_chart, bidder_bids_chart, spacing=0
+    ).resolve_scale(
         y="shared"  # Share the y-axis scale between the two charts
     )
 
     combined_chart.show()
-    return chart1, chart2, combined_chart
+    return bidder_bids_chart, bidder_count_chart, combined_chart
 
 
 @app.cell
