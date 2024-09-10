@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.8.9"
+__generated_with = "0.8.13"
 app = marimo.App(width="full", app_title="preconf_analytics")
 
 
@@ -193,7 +193,7 @@ def __(byte_to_string, mev_boost_blocks_df, pl):
     return mev_boost_relay_transformed_df,
 
 
-@app.cell(hide_code=True)
+@app.cell
 def __(commit_df, mev_boost_relay_transformed_df, pl):
     # transform commit_df to stsandardize to block level data
     preconf_blocks_grouped_df = (
@@ -209,6 +209,7 @@ def __(commit_df, mev_boost_relay_transformed_df, pl):
         .agg(
             pl.col("decayed_bid_eth").sum().alias("total_decayed_bid_eth"),
             pl.col("bid_eth").sum().alias("total_bid_eth"),
+            pl.col("isSlash").first().alias("isSlash"),
         )
     )
     # join mev-boost data to preconf data
@@ -234,13 +235,13 @@ def __(
     pl,
 ):
     min_mev_boost_block = (
-        mev_boost_relay_transformed_df.tail(500)
+        mev_boost_relay_transformed_df.tail(3000)
         .select("block_number")
         .min()
         .item()
     )
     max_mev_boost_block = (
-        mev_boost_relay_transformed_df.tail(500)
+        mev_boost_relay_transformed_df.tail(3000)
         .select("block_number")
         .max()
         .item()
@@ -249,7 +250,7 @@ def __(
 
     mev_boost_block_chart = (
         alt.Chart(
-            mev_boost_relay_transformed_df.tail(500)
+            mev_boost_relay_transformed_df.tail(3000)
             .group_by("mev_boost")
             .agg(pl.col("mev_boost").count().alias("count"))
         )
@@ -262,7 +263,7 @@ def __(
             ),  # Add legend
         )
         .properties(
-            title=f"MEV-Boost Blocks from {min_mev_boost_block} - {max_mev_boost_block} ({max_mev_boost_block - min_mev_boost_block} blocks)",
+            title=f"MEV-Boost Blocks from {min_mev_boost_block} - {max_mev_boost_block} (most recent 3000 blocks)",
             height=400,
             width=500,
         )
@@ -271,7 +272,7 @@ def __(
 
     preconf_block_bids_chart = (
         alt.Chart(
-            mev_boost_blocks_preconfs_joined_df.tail(500).filter(
+            mev_boost_blocks_preconfs_joined_df.tail(3000).filter(
                 pl.col("block_bid_eth") > 0
             )
         )
@@ -288,7 +289,11 @@ def __(
             ),
             tooltip=["block_number", "builder_graffiti", "block_bid_eth", "relay"],
         )
-        .properties(title="mev-boost blocks with preconfs", height=400, width=500)
+        .properties(
+            title="mev-boost blocks with preconfs (most recent 3000 blocks)",
+            height=400,
+            width=500,
+        )
         .interactive()  # Enable interactivity
     )
 
@@ -310,7 +315,7 @@ def __(
     )
 
 
-@app.cell(hide_code=True)
+@app.cell
 def __(mev_boost_blocks_preconfs_joined_df, pl):
     # chart that shows the total decayed bids vs the mev-boost bid amount
     preconf_bid_mev_boost_df = mev_boost_blocks_preconfs_joined_df.filter(
@@ -323,11 +328,11 @@ def __(mev_boost_blocks_preconfs_joined_df, pl):
     return preconf_bid_mev_boost_df,
 
 
-@app.cell(hide_code=True)
+@app.cell
 def __(alt, preconf_bid_mev_boost_df):
     # Create a scatter plot
     preconf_bid_breakdown = (
-        alt.Chart(preconf_bid_mev_boost_df.tail(500))
+        alt.Chart(preconf_bid_mev_boost_df.tail(3000))
         .mark_point()  # Mark type for scatter plot
         .encode(
             x=alt.X("datetime:T", title="datetime"),
@@ -346,7 +351,7 @@ def __(alt, preconf_bid_mev_boost_df):
         .properties(
             width=600,
             height=400,
-            title="preconf percent of mev-boost bids",
+            title="preconf percent of mev-boost bids (most recent 3000 blocks)",
         )
         .interactive()
     )
@@ -439,7 +444,7 @@ def __(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def __(commits_l1_df, pl):
     # Round the datetime column to the nearest hour
     date_truncate_df = commits_l1_df.with_columns(
@@ -464,8 +469,8 @@ def __(commits_l1_df, pl):
     return date_truncate_df, slash_rate_df
 
 
-@app.cell(hide_code=True)
-def __(alt, datetime, pd, pl, slash_rate_df, timedelta):
+@app.cell
+def __(alt, date_truncate_df, datetime, pd, pl, slash_rate_df, timedelta):
     # Calculate data for the past 24 hours
     current_time = datetime.now()
     past_24_hours = current_time - timedelta(hours=24)
@@ -484,7 +489,7 @@ def __(alt, datetime, pd, pl, slash_rate_df, timedelta):
 
     # Create formatted strings for each line of the text box
     summary_text = [
-        "Slashing Summary (past 24 hours)",
+        "Slashing Count (past 24 hours)",
         f"Non Slash Count: {total_non_slash_count}",
         f"Slash Count: {total_slash_count}",
         f"Slash Rate: {total_slash_rate * 100:.2f}%",
@@ -492,48 +497,72 @@ def __(alt, datetime, pd, pl, slash_rate_df, timedelta):
     # Create a common color encoding with legend to distinguish the bar and line charts
     color = alt.Color("Metric:N", legend=alt.Legend(title="Metrics"))
 
-    # Bar chart for daily slash count
-    slash_count_bar_chart = (
-        alt.Chart(slash_rate_df)
-        .transform_calculate(Metric='"Slash Count"')
+
+    # OLD/deprecated 9/9/24
+    # # Bar chart for daily slash count
+    # slash_count_bar_chart = (
+    #     alt.Chart(slash_rate_df)
+    #     .transform_calculate(Metric='"Slash Count"')
+    #     .mark_bar()
+    #     .encode(
+    #         x=alt.X(
+    #             "hour:T", title="Hour", axis=alt.Axis(labelAngle=45)
+    #         ),  # Rotate x-axis labels by 45 degrees
+    #         y=alt.Y("slash_count:Q", title="Slash Count"),
+    #         color=color,  # Add color encoding for legend
+    #         tooltip=[
+    #             "hour:T",
+    #             "slash_count:Q",
+    #             "slash_rate:Q",
+    #         ],  # Add tooltip to show details on hover
+    #     )
+    #     .properties(width=800, height=300)
+    # )
+
+    # # Line chart for slash rate over time with 50% transparency and legend
+    # slash_rate_line_chart = (
+    #     alt.Chart(slash_rate_df)
+    #     .transform_calculate(Metric='"Slash Rate"')
+    #     .mark_line(opacity=0.35)
+    #     .encode(
+    #         x=alt.X(
+    #             "hour:T", axis=alt.Axis(labelAngle=45)
+    #         ),  # Ensure the x-axis rotation is consistent
+    #         y=alt.Y("slash_rate:Q", title="Slash Rate"),
+    #         color=color,  # Add color encoding for legend
+    #         tooltip=["hour:T", "slash_rate:Q"],  # Tooltip for slash rate
+    #     )
+    # )
+
+    # # Overlay the bar and line charts
+    # slash_rate_combined_chart = (
+    #     alt.layer(slash_count_bar_chart, slash_rate_line_chart)
+    #     .resolve_scale(
+    #         y="independent"  # Allow each chart to have its own y-axis scale
+    #     )
+    #     .properties(title="Historical Slashing Rates")
+    # )
+
+    grouped_slashing_chart = (
+        alt.Chart(date_truncate_df.head(4000))
         .mark_bar()
         .encode(
-            x=alt.X(
-                "hour:T", title="Hour", axis=alt.Axis(labelAngle=45)
-            ),  # Rotate x-axis labels by 45 degrees
-            y=alt.Y("slash_count:Q", title="Slash Count"),
-            color=color,  # Add color encoding for legend
+            x=alt.X("hour:T", title="Hour", axis=alt.Axis(labelAngle=45)),
+            y=alt.Y(
+                "count(isSlash):Q", title="Count", stack="zero"
+            ),  # Stack areas
+            color=alt.Color(
+                "isSlash:N", title="Metric"
+            ),  # Treat 'isSlash' as a categorical variable
             tooltip=[
                 "hour:T",
-                "slash_count:Q",
-                "slash_rate:Q",
-            ],  # Add tooltip to show details on hover
+                "isSlash:N",
+                "count(isSlash):Q",
+            ],
         )
-        .properties(width=800, height=300)
-    )
-
-    # Line chart for slash rate over time with 50% transparency and legend
-    slash_rate_line_chart = (
-        alt.Chart(slash_rate_df)
-        .transform_calculate(Metric='"Slash Rate"')
-        .mark_line(opacity=0.35)
-        .encode(
-            x=alt.X(
-                "hour:T", axis=alt.Axis(labelAngle=45)
-            ),  # Ensure the x-axis rotation is consistent
-            y=alt.Y("slash_rate:Q", title="Slash Rate"),
-            color=color,  # Add color encoding for legend
-            tooltip=["hour:T", "slash_rate:Q"],  # Tooltip for slash rate
-        )
-    )
-
-    # Overlay the bar and line charts
-    slash_rate_combined_chart = (
-        alt.layer(slash_count_bar_chart, slash_rate_line_chart)
-        .resolve_scale(
-            y="independent"  # Allow each chart to have its own y-axis scale
-        )
-        .properties(title="Historical Slashing Rates")
+        .properties(
+            width=800, height=300, title="Slash Count (hourly)"
+        )  # Increase width for better readability
     )
 
     # Text box for summary statistics
@@ -556,7 +585,7 @@ def __(alt, datetime, pd, pl, slash_rate_df, timedelta):
 
     # Combine the main chart with the text box using horizontal concatenation
     final_slashing_chart = (
-        alt.hconcat(slash_stats_text_box, slash_rate_combined_chart).resolve_scale(
+        alt.hconcat(slash_stats_text_box, grouped_slashing_chart).resolve_scale(
             y="independent"
         )
         # .properties(title="Slash Count and Slash Rate Over Time")
@@ -568,10 +597,8 @@ def __(alt, datetime, pd, pl, slash_rate_df, timedelta):
         current_time,
         df_last_24_hours,
         final_slashing_chart,
+        grouped_slashing_chart,
         past_24_hours,
-        slash_count_bar_chart,
-        slash_rate_combined_chart,
-        slash_rate_line_chart,
         slash_stats_text_box,
         summary_text,
         total_non_slash_count,
@@ -600,7 +627,7 @@ def __(date_truncate_df, pl):
     return commiter_slash_rate_df,
 
 
-@app.cell(hide_code=True)
+@app.cell
 def __(alt, color, commiter_slash_rate_df, past_24_hours, pl):
     # Melted commiter slashing dataframe (total history)
     historical_provider_slashing = commiter_slash_rate_df.unpivot(
