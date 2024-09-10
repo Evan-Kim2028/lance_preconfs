@@ -4,7 +4,7 @@ __generated_with = "0.8.9"
 app = marimo.App(width="full", app_title="preconf_analytics")
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __():
     import altair as alt
     import marimo as mo
@@ -57,7 +57,7 @@ def __(LanceTable, pl):
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(commitments_table, pl):
     commit_df = (
         pl.from_arrow(commitments_table.to_lance().to_table())
@@ -125,7 +125,7 @@ def __(commitments_table, pl):
     return commit_df,
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(commit_df, l1_tx_df, pl):
     # join commits and l1 df together
     commits_l1_df = commit_df.join(
@@ -167,7 +167,7 @@ def __():
     return byte_to_string,
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(byte_to_string, mev_boost_blocks_df, pl):
     mev_boost_relay_transformed_df = mev_boost_blocks_df.with_columns(
         pl.from_epoch("timestamp", time_unit="s").alias("datetime"),
@@ -193,7 +193,7 @@ def __(byte_to_string, mev_boost_blocks_df, pl):
     return mev_boost_relay_transformed_df,
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(commit_df, mev_boost_relay_transformed_df, pl):
     # transform commit_df to stsandardize to block level data
     preconf_blocks_grouped_df = (
@@ -234,18 +234,24 @@ def __(
     pl,
 ):
     min_mev_boost_block = (
-        mev_boost_relay_transformed_df.select("block_number").min().item()
+        mev_boost_relay_transformed_df.tail(500)
+        .select("block_number")
+        .min()
+        .item()
     )
     max_mev_boost_block = (
-        mev_boost_relay_transformed_df.select("block_number").max().item()
+        mev_boost_relay_transformed_df.tail(500)
+        .select("block_number")
+        .max()
+        .item()
     )
 
 
     mev_boost_block_chart = (
         alt.Chart(
-            mev_boost_relay_transformed_df.group_by("mev_boost").agg(
-                pl.col("mev_boost").count().alias("count")
-            )
+            mev_boost_relay_transformed_df.tail(500)
+            .group_by("mev_boost")
+            .agg(pl.col("mev_boost").count().alias("count"))
         )
         .mark_bar()
         .encode(
@@ -265,7 +271,9 @@ def __(
 
     preconf_block_bids_chart = (
         alt.Chart(
-            mev_boost_blocks_preconfs_joined_df.filter(pl.col("block_bid_eth") > 0)
+            mev_boost_blocks_preconfs_joined_df.tail(500).filter(
+                pl.col("block_bid_eth") > 0
+            )
         )
         .mark_point()
         .encode(
@@ -302,7 +310,7 @@ def __(
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(mev_boost_blocks_preconfs_joined_df, pl):
     # chart that shows the total decayed bids vs the mev-boost bid amount
     preconf_bid_mev_boost_df = mev_boost_blocks_preconfs_joined_df.filter(
@@ -315,20 +323,21 @@ def __(mev_boost_blocks_preconfs_joined_df, pl):
     return preconf_bid_mev_boost_df,
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(alt, preconf_bid_mev_boost_df):
     # Create a scatter plot
     preconf_bid_breakdown = (
-        alt.Chart(preconf_bid_mev_boost_df)
+        alt.Chart(preconf_bid_mev_boost_df.tail(500))
         .mark_point()  # Mark type for scatter plot
         .encode(
-            x=alt.X("block_number:N", title="Block Number"),
+            x=alt.X("datetime:T", title="datetime"),
             y=alt.Y("preconf_bid_amt_pct:Q", title="preconf percent of bid"),
             color=alt.Color("block_bid_eth:Q", title="mev-boost bid (ETH)").scale(
                 scheme="blues"
             ),
             tooltip=[
                 "block_number",
+                "datetime",
                 "builder_graffiti",
                 "preconf_bid_amt_pct",
                 "block_bid_eth",
