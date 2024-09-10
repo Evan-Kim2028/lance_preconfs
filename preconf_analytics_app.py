@@ -4,7 +4,7 @@ __generated_with = "0.8.13"
 app = marimo.App(width="full", app_title="preconf_analytics")
 
 
-@app.cell(hide_code=True)
+@app.cell
 def __():
     import altair as alt
     import marimo as mo
@@ -544,7 +544,7 @@ def __(alt, date_truncate_df, datetime, pd, pl, slash_rate_df, timedelta):
     # )
 
     grouped_slashing_chart = (
-        alt.Chart(date_truncate_df.head(4000))
+        alt.Chart(date_truncate_df.head(3000))
         .mark_bar()
         .encode(
             x=alt.X("hour:T", title="Hour", axis=alt.Axis(labelAngle=45)),
